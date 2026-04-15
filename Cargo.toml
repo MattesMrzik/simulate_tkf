@@ -1,0 +1,11 @@
+[package]
+name = "simulate_tkf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6.0", features = ["derive"] }
+memory-stats = "1.2.0"
+phylo = { git = "https://github.com/MattesMrzik/rust-phylo", branch = "simulate-tkf92-msa" }
+# phylo = { path = "/Users/mrzi/Documents/develop/phylo/139-simulate-tkf92-msa/rust-phylo/phylo" }
+anyhow = "1.0.86"
