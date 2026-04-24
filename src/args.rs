@@ -1,6 +1,29 @@
 use clap::Parser;
 use std::path::PathBuf;
 
+// TODO: rather than implementing the arg as str and converting it here we could add this to the
+// phylo crate
+// use std::str::FromStr;
+//
+// impl FromStr for RootLength {
+//     type Err = String;
+//
+//     fn from_str(s: &str) -> Result<Self, Self::Err> {
+//         match s.to_lowercase().as_str() {
+//             "sampled" => Ok(RootLength::Sampled),
+//             "expected" => Ok(RootLength::Expected),
+//             _ => {
+//                 let n = s.parse::<usize>()
+//                     .map_err(|_| format!(
+//                         "Invalid root length '{}'. Use 'sampled', 'expected', or a positive integer.",
+//                         s
+//                     ))?;
+//
+//                 Ok(RootLength::Defined(n))
+//             }
+//         }
+//     }
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
@@ -30,7 +53,7 @@ pub struct Args {
 
     /// Root sequence length
     #[arg(long)]
-    pub root_length: Option<usize>,
+    pub root_length: Option<String>,
 
     /// Output base directory
     #[arg(short, long, default_value = "data")]

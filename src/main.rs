@@ -1,22 +1,23 @@
-use anyhow::Context;
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use memory_stats::memory_stats;
-use phylo::Result;
+use std::collections::HashSet;
+use std::fs;
+use std::io::Write;
+
 use phylo::alignment::{Alignment, AlignmentSimulation, AncestralAlignment, MASA};
 use phylo::io::{read_newick_from_file, write_newick_to_file};
 use phylo::random::DefaultGenerator;
 use phylo::substitution_models::{JC69, SubstModel};
 use phylo::tkf_model::TKF92IndelModel;
-use phylo::tkf_model::sim_tkf_msa::TKFMSASimulator;
+use phylo::tkf_model::simulate_msa::{RootLength, TKFMSASimulator};
 use phylo::tree::Tree;
-use std::collections::HashSet;
-use std::fs;
-use std::io::Write;
 
-mod args;
 use crate::args::Args;
 
-pub(crate) fn set_missing_tree_node_ids(tree: &Tree) -> Result<Tree> {
+mod args;
+
+fn set_missing_tree_node_ids(tree: &Tree) -> Tree {
     let mut tree_with_all_ids = tree.clone();
     let mut seen_user_set_ids = HashSet::new();
     let mut count = 0;
@@ -31,7 +32,7 @@ pub(crate) fn set_missing_tree_node_ids(tree: &Tree) -> Result<Tree> {
             tree_with_all_ids.node_mut(node_idx).id = new_id.clone();
         }
     }
-    Ok(tree_with_all_ids)
+    tree_with_all_ids
 }
 
 fn write_info_file(
@@ -51,7 +52,7 @@ fn write_info_file(
     writeln!(file, "lambda: {}", args.lambda).unwrap();
     writeln!(file, "mu: {}", args.mu).unwrap();
     writeln!(file, "r: {}", args.r).unwrap();
-    if let Some(root_len) = args.root_length {
+    if let Some(root_len) = &args.root_length {
         writeln!(file, "root_length: {}", root_len).unwrap();
     }
     writeln!(
@@ -73,7 +74,7 @@ fn main() -> Result<()> {
         .expect("Unable to parse Newick tree")
         .pop()
         .expect("Tree file was empty");
-    let tree = set_missing_tree_node_ids(&tree).unwrap();
+    let tree = set_missing_tree_node_ids(&tree);
 
     let subst_model = SubstModel::<JC69>::new(&[], &[]);
 
@@ -92,8 +93,23 @@ fn main() -> Result<()> {
         rng,
         args.max_insertion_length,
     );
-    if let Some(root_len) = args.root_length {
-        simulator.root_length(Some(root_len));
+    if let Some(root_len) = args.root_length.as_ref() {
+        let s = root_len.to_string();
+        let root_len = match s.to_lowercase().as_str() {
+            "sampled" => RootLength::Sampled,
+            "expected" => RootLength::Expected,
+            _ => {
+                let n = s.parse::<usize>()
+            .map_err(|_| {
+                anyhow!(
+                    "invalid root length '{}'; expected 'sampled', 'expected', or a positive integer",
+                    s
+                )
+            })?;
+                RootLength::Defined(n)
+            }
+        };
+        simulator.root_length(root_len);
     }
 
     fs::create_dir_all(&args.output_dir).expect("Unable to create output directory");
