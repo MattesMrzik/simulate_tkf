@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use memory_stats::memory_stats;
@@ -6,7 +8,7 @@ use std::fs;
 use std::io::Write;
 
 use phylo::alignment::{Alignment, AlignmentSimulation, AncestralAlignment, MASA};
-use phylo::io::{read_newick_from_file, write_newick_to_file};
+use phylo::io::write_newick_to_file;
 use phylo::random::DefaultGenerator;
 use phylo::substitution_models::{JC69, SubstModel};
 use phylo::tkf_model::TKF92IndelModel;
@@ -16,6 +18,24 @@ use phylo::tree::Tree;
 use crate::args::Args;
 
 mod args;
+
+fn has_any_leaf(msa: &MASA) -> bool {
+    for leaf_record in msa.seqs() {
+        if !leaf_record.seq().is_empty() {
+            return true;
+        }
+    }
+    false
+}
+
+fn all_leaves_have_chars(msa: &MASA) -> bool {
+    for leaf_record in msa.seqs() {
+        if leaf_record.seq().is_empty() {
+            return false;
+        }
+    }
+    true
+}
 
 fn set_missing_tree_node_ids(tree: &Tree) -> Tree {
     let mut tree_with_all_ids = tree.clone();
@@ -33,6 +53,10 @@ fn set_missing_tree_node_ids(tree: &Tree) -> Tree {
         }
     }
     tree_with_all_ids
+}
+
+fn prune_empty_leaves(msa: MASA, tree: &Tree) -> (Tree, MASA) {
+    todo!("Remove leaves with empty sequences from the tree and update the MSA accordingly")
 }
 
 fn write_info_file(
@@ -99,13 +123,12 @@ fn main() -> Result<()> {
             "sampled" => RootLength::Sampled,
             "expected" => RootLength::Expected,
             _ => {
-                let n = s.parse::<usize>()
-            .map_err(|_| {
-                anyhow!(
-                    "invalid root length '{}'; expected 'sampled', 'expected', or a positive integer",
-                    s
-                )
-            })?;
+                let n = s.parse::<usize>().map_err(|_| {
+                    anyhow!(
+                        "invalid root length '{}'; expected 'sampled', 'expected', or a positive integer",
+                        s
+                    )
+                })?;
                 RootLength::Defined(n)
             }
         };
@@ -114,26 +137,31 @@ fn main() -> Result<()> {
 
     fs::create_dir_all(&args.output_dir).expect("Unable to create output directory");
 
-    // Simulate until we get a valid MSA (length > 0 and no all-gap leaf sequences)
-    let mut initial_mem;
-    let mut final_mem;
-    let mut start;
-    let mut duration;
+    let validate = if args.remove_gap_leaves {
+        has_any_leaf
+    } else {
+        all_leaves_have_chars
+    };
+
     let mut msa;
+    let mut duration;
     let mut attempt = 0;
 
     loop {
-        attempt += 1;
-        initial_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
-        start = std::time::Instant::now();
+        let initial_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
+        let start = std::time::Instant::now();
         msa = simulator.simulate_ancestral_alignment::<MASA>();
         duration = start.elapsed();
-        final_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
+        let final_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
+
+        if msa.len() == 0 {
+            continue;
+        }
+        attempt += 1;
 
         let mem_diff = final_mem as i64 - initial_mem as i64;
         let mem_mb = mem_diff as f64 / 1024.0 / 1024.0;
 
-        // Write info for this attempt
         write_info_file(
             &args.output_dir.join(format!("info_{}.txt", attempt)),
             msa.len(),
@@ -144,71 +172,43 @@ fn main() -> Result<()> {
             None,
         );
 
-        if msa.len() == 0 {
-            continue;
-        }
-
-        let mut all_leaves_have_chars = true;
-        for leaf_record in msa.seqs() {
-            if leaf_record.seq().is_empty() {
-                all_leaves_have_chars = false;
-                break;
-            }
-        }
-
-        if all_leaves_have_chars {
+        if validate(&msa) {
             break;
         }
     }
 
-    // Output basic info about the simulated MSA
+    let mut tree = tree;
+
+    if args.remove_gap_leaves {
+        (tree, msa) = prune_empty_leaves(msa, &tree);
+    }
+
     println!("Simulation took: {:?}", duration);
     println!("MSA length: {}", msa.len());
 
-    let mem_diff = final_mem as i64 - initial_mem as i64;
-    let mem_mb = mem_diff as f64 / 1024.0 / 1024.0;
-    println!("Memory usage of simulation: {:.2} MB", mem_mb);
-
-    // Write MASA to masa.fasta
     let mut masa_file =
         fs::File::create(args.output_dir.join("masa.fasta")).expect("Unable to create masa.fasta");
     write!(masa_file, "{}", msa).expect("Unable to write to masa.fasta");
 
-    // Convert MASA to MSA (leaf nodes only) and write to msa.fasta
     let leaf_msa: phylo::alignment::MSA = msa.clone().into_alignment(&tree);
     let mut msa_file =
         fs::File::create(args.output_dir.join("msa.fasta")).expect("Unable to create msa.fasta");
     write!(msa_file, "{}", leaf_msa).expect("Unable to write to msa.fasta");
 
-    // Final successful info.txt
-    write_info_file(
-        &args.output_dir.join("info.txt"),
-        msa.len(),
-        duration.as_millis(),
-        mem_mb,
-        seed_used,
-        &args,
-        Some(attempt),
-    );
-
-    for node in tree.preorder() {
-        println!("Node ID: {}", tree.node_id(node),);
-    }
+    // copy the latest info file to info.txt for easy access
+    fs::copy(
+        args.output_dir.join(format!("info_{}.txt", attempt)),
+        args.output_dir.join("info.txt"),
+    )
+    .expect("Unable to copy info file");
 
     write_newick_to_file(
         std::slice::from_ref(&tree),
         args.output_dir.join("tree.nwk"),
     )
-    .context("Failed to write optimized tree to file")?;
-    let tree_from_just_written_file = read_newick_from_file(args.output_dir.join("tree.nwk"))
-        .expect("Unable to read back the just written tree file")
-        .pop()
-        .expect("The just written tree file was empty");
-    println!(
-        "Tree read back from file matches original: {}",
-        tree_from_just_written_file
-    );
-    println!("newick = {}", tree.to_newick());
+    .context("Failed to write tree to file")?;
+
+    // TODO: also write the other newick with and without brackets around the root, see root_tree
 
     println!("Results written to: {:?}", args.output_dir);
 
@@ -216,7 +216,7 @@ fn main() -> Result<()> {
         let msa_path = args.output_dir.join("masa.fasta");
         println!("Opening results in AliView...");
         std::process::Command::new("open")
-            .args(["-g", "-a", "AliView"]) // -a is for specifying the application, -g is for opening in the background
+            .args(["-g", "-a", "AliView"])
             .arg(msa_path)
             .status()
             .expect("Failed to open AliView");

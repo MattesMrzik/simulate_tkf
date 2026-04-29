@@ -62,4 +62,8 @@ pub struct Args {
     /// Open results in AliView after simulation
     #[arg(long)]
     pub ali_view: bool,
+
+    /// Remove leaves with empty sequences after simulation
+    #[arg(long)]
+    pub remove_gap_leaves: bool,
 }
