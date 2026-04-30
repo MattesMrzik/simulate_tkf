@@ -63,7 +63,7 @@ pub struct Args {
     #[arg(long)]
     pub ali_view: bool,
 
-    /// Remove leaves with empty sequences after simulation
+    /// Retry simulation if any leaf has an empty sequence
     #[arg(long)]
-    pub remove_gap_leaves: bool,
+    pub retry_if_empty_leaf: bool,
 }

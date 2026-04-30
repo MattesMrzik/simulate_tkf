@@ -55,10 +55,6 @@ fn set_missing_tree_node_ids(tree: &Tree) -> Tree {
     tree_with_all_ids
 }
 
-fn prune_empty_leaves(msa: MASA, tree: &Tree) -> (Tree, MASA) {
-    todo!("Remove leaves with empty sequences from the tree and update the MSA accordingly")
-}
-
 fn write_info_file(
     path: &std::path::Path,
     msa_len: usize,
@@ -137,12 +133,6 @@ fn main() -> Result<()> {
 
     fs::create_dir_all(&args.output_dir).expect("Unable to create output directory");
 
-    let validate = if args.remove_gap_leaves {
-        has_any_leaf
-    } else {
-        all_leaves_have_chars
-    };
-
     let mut msa;
     let mut duration;
     let mut attempt = 0;
@@ -172,15 +162,9 @@ fn main() -> Result<()> {
             None,
         );
 
-        if validate(&msa) {
+        if all_leaves_have_chars(&msa) || !args.retry_if_empty_leaf {
             break;
         }
-    }
-
-    let mut tree = tree;
-
-    if args.remove_gap_leaves {
-        (tree, msa) = prune_empty_leaves(msa, &tree);
     }
 
     println!("Simulation took: {:?}", duration);
