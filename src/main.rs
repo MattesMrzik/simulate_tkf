@@ -133,18 +133,18 @@ fn main() -> Result<()> {
 
     fs::create_dir_all(&args.output_dir).expect("Unable to create output directory");
 
-    let mut msa;
+    let mut masa;
     let mut duration;
     let mut attempt = 0;
 
     loop {
         let initial_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
         let start = std::time::Instant::now();
-        msa = simulator.simulate_ancestral_alignment::<MASA>();
+        masa = simulator.simulate_ancestral_alignment::<MASA>();
         duration = start.elapsed();
         let final_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
 
-        if msa.len() == 0 {
+        if masa.len() == 0 {
             continue;
         }
         attempt += 1;
@@ -154,7 +154,7 @@ fn main() -> Result<()> {
 
         write_info_file(
             &args.output_dir.join(format!("info_{}.txt", attempt)),
-            msa.len(),
+            masa.len(),
             duration.as_millis(),
             mem_mb,
             seed_used,
@@ -162,19 +162,26 @@ fn main() -> Result<()> {
             None,
         );
 
-        if all_leaves_have_chars(&msa) || !args.retry_if_empty_leaf {
+        if all_leaves_have_chars(&masa) || !args.retry_if_empty_leaf {
             break;
         }
     }
 
     println!("Simulation took: {:?}", duration);
-    println!("MSA length: {}", msa.len());
+    println!("MSA length: {}", masa.len());
+    masa.remove_extinct_columns();
 
+    let masa_len = masa.len();
     let mut masa_file =
         fs::File::create(args.output_dir.join("masa.fasta")).expect("Unable to create masa.fasta");
-    write!(masa_file, "{}", msa).expect("Unable to write to masa.fasta");
+    write!(masa_file, "{}", masa).expect("Unable to write to masa.fasta");
 
-    let leaf_msa: phylo::alignment::MSA = msa.clone().into_alignment(&tree);
+    let leaf_msa: phylo::alignment::MSA = masa.clone().into_alignment(&tree);
+    let leaf_msa_len = leaf_msa.len();
+    assert!(
+        leaf_msa_len == masa_len,
+        "Leaf MSA length should match ancestral MSA length, since i called remove_extinct_columns() on the ancestral MSA"
+    );
     let mut msa_file =
         fs::File::create(args.output_dir.join("msa.fasta")).expect("Unable to create msa.fasta");
     write!(msa_file, "{}", leaf_msa).expect("Unable to write to msa.fasta");
