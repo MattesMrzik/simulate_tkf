@@ -108,13 +108,12 @@ fn main() -> Result<()> {
             "sampled" => RootLength::Sampled,
             "expected" => RootLength::Expected,
             _ => {
-                let n = s.parse::<usize>()
-            .map_err(|_| {
-                anyhow!(
-                    "invalid root length '{}'; expected 'sampled', 'expected', or a positive integer",
-                    s
-                )
-            })?;
+                let n = s.parse::<usize>().map_err(|_| {
+                    anyhow!(
+                        "invalid root length '{}'; expected 'sampled', 'expected', or a positive integer",
+                        s
+                    )
+                })?;
                 RootLength::Defined(n)
             }
         };
@@ -124,20 +123,17 @@ fn main() -> Result<()> {
     fs::create_dir_all(&args.output_dir).expect("Unable to create output directory");
 
     // Simulate until we get a valid MSA (length > 0 and no all-gap leaf sequences)
-    let mut mem_mb;
     let mut sim_result: TKFMSASimulationResult<MASA>;
-    let mut duration;
     let mut attempt = 0;
-
     loop {
         let initial_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
         let start = std::time::Instant::now();
         sim_result = simulator.simulate_with_fragments::<MASA>();
-        duration = start.elapsed();
+        let duration = start.elapsed();
         let final_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
 
         let mem_diff = final_mem as i64 - initial_mem as i64;
-        mem_mb = mem_diff as f64 / 1024.0 / 1024.0;
+        let mem_mb = mem_diff as f64 / 1024.0 / 1024.0;
         attempt += 1;
         if sim_result.masa.len() == 0 {
             continue;
@@ -159,9 +155,6 @@ fn main() -> Result<()> {
         }
     }
 
-    // Output basic info about the simulated MSA
-    println!("Simulation took: {:?}", duration);
-
     println!("MSA length: {}", sim_result.masa.len());
     sim_result.masa.remove_extinct_columns();
 
@@ -182,17 +175,6 @@ fn main() -> Result<()> {
         fs::File::create(args.output_dir.join("msa.fasta")).expect("Unable to create msa.fasta");
     write!(msa_file, "{}", leaf_msa).expect("Unable to write to msa.fasta");
 
-    // Final successful info.txt
-    write_info_file(
-        &args.output_dir.join("info.txt"),
-        sim_result.masa.len(),
-        duration.as_millis(),
-        mem_mb,
-        seed_used,
-        &args,
-        Some(attempt),
-    );
-
     let frag_json = sim_result
         .fragmentation
         .iter()
@@ -204,12 +186,18 @@ fn main() -> Result<()> {
         format!("[{}]", frag_json),
     )
     .expect("Unable to write fragmentation.json");
+    // copy the latest info file to info.txt for easy access
+    fs::copy(
+        args.output_dir.join(format!("info_{}.txt", attempt)),
+        args.output_dir.join("info.txt"),
+    )
+    .expect("Unable to copy info file");
 
     write_newick_to_file(
         std::slice::from_ref(&tree),
         args.output_dir.join("tree.nwk"),
     )
-    .context("Failed to write optimized tree to file")?;
+    .context("Failed to write tree to file")?;
 
     println!("Results written to: {:?}", args.output_dir);
 
@@ -217,7 +205,7 @@ fn main() -> Result<()> {
         let msa_path = args.output_dir.join("masa.fasta");
         println!("Opening results in AliView...");
         std::process::Command::new("open")
-            .args(["-g", "-a", "AliView"]) // -a is for specifying the application, -g is for opening in the background
+            .args(["-g", "-a", "AliView"])
             .arg(msa_path)
             .status()
             .expect("Failed to open AliView");
