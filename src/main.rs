@@ -5,17 +5,26 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 
-use phylo::alignment::{Alignment, AlignmentSimulation, AncestralAlignment, MASA};
-use phylo::io::{read_newick_from_file, write_newick_to_file};
+use phylo::alignment::{Alignment, AncestralAlignment, MASA};
+use phylo::io::write_newick_to_file;
 use phylo::random::DefaultGenerator;
 use phylo::substitution_models::{JC69, SubstModel};
 use phylo::tkf_model::TKF92IndelModel;
-use phylo::tkf_model::simulate_msa::{RootLength, TKFMSASimulator};
+use phylo::tkf_model::simulate_msa::{RootLength, TKFMSASimulationResult, TKFMSASimulator};
 use phylo::tree::Tree;
 
 use crate::args::Args;
 
 mod args;
+
+fn all_leaves_have_chars(msa: &MASA) -> bool {
+    for leaf_record in msa.seqs() {
+        if leaf_record.seq().is_empty() {
+            return false;
+        }
+    }
+    true
+}
 
 fn set_missing_tree_node_ids(tree: &Tree) -> Tree {
     let mut tree_with_all_ids = tree.clone();
@@ -115,28 +124,29 @@ fn main() -> Result<()> {
     fs::create_dir_all(&args.output_dir).expect("Unable to create output directory");
 
     // Simulate until we get a valid MSA (length > 0 and no all-gap leaf sequences)
-    let mut initial_mem;
-    let mut final_mem;
-    let mut start;
+    let mut mem_mb;
+    let mut sim_result: TKFMSASimulationResult<MASA>;
     let mut duration;
-    let mut msa;
     let mut attempt = 0;
 
     loop {
-        attempt += 1;
-        initial_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
-        start = std::time::Instant::now();
-        msa = simulator.simulate_ancestral_alignment::<MASA>();
+        let initial_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
+        let start = std::time::Instant::now();
+        sim_result = simulator.simulate_with_fragments::<MASA>();
         duration = start.elapsed();
-        final_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
+        let final_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
 
         let mem_diff = final_mem as i64 - initial_mem as i64;
-        let mem_mb = mem_diff as f64 / 1024.0 / 1024.0;
+        mem_mb = mem_diff as f64 / 1024.0 / 1024.0;
+        attempt += 1;
+        if sim_result.masa.len() == 0 {
+            continue;
+        }
 
         // Write info for this attempt
         write_info_file(
             &args.output_dir.join(format!("info_{}.txt", attempt)),
-            msa.len(),
+            sim_result.masa.len(),
             duration.as_millis(),
             mem_mb,
             seed_used,
@@ -144,38 +154,30 @@ fn main() -> Result<()> {
             None,
         );
 
-        if msa.len() == 0 {
-            continue;
-        }
-
-        let mut all_leaves_have_chars = true;
-        for leaf_record in msa.seqs() {
-            if leaf_record.seq().is_empty() {
-                all_leaves_have_chars = false;
-                break;
-            }
-        }
-
-        if all_leaves_have_chars {
+        if all_leaves_have_chars(&sim_result.masa) || !args.retry_if_empty_leaf {
             break;
         }
     }
 
     // Output basic info about the simulated MSA
     println!("Simulation took: {:?}", duration);
-    println!("MSA length: {}", msa.len());
 
-    let mem_diff = final_mem as i64 - initial_mem as i64;
-    let mem_mb = mem_diff as f64 / 1024.0 / 1024.0;
-    println!("Memory usage of simulation: {:.2} MB", mem_mb);
+    println!("MSA length: {}", sim_result.masa.len());
+    sim_result.masa.remove_extinct_columns();
 
+    let masa_len = sim_result.masa.len();
     // Write MASA to masa.fasta
     let mut masa_file =
         fs::File::create(args.output_dir.join("masa.fasta")).expect("Unable to create masa.fasta");
-    write!(masa_file, "{}", msa).expect("Unable to write to masa.fasta");
+    write!(masa_file, "{}", sim_result.masa).expect("Unable to write to masa.fasta");
 
     // Convert MASA to MSA (leaf nodes only) and write to msa.fasta
-    let leaf_msa: phylo::alignment::MSA = msa.clone().into_alignment(&tree);
+    let leaf_msa: phylo::alignment::MSA = sim_result.masa.clone().into_alignment(&tree);
+    let leaf_msa_len = leaf_msa.len();
+    assert!(
+        leaf_msa_len == masa_len,
+        "Leaf MSA length should match ancestral MSA length, since i called remove_extinct_columns() on the ancestral MSA"
+    );
     let mut msa_file =
         fs::File::create(args.output_dir.join("msa.fasta")).expect("Unable to create msa.fasta");
     write!(msa_file, "{}", leaf_msa).expect("Unable to write to msa.fasta");
@@ -183,7 +185,7 @@ fn main() -> Result<()> {
     // Final successful info.txt
     write_info_file(
         &args.output_dir.join("info.txt"),
-        msa.len(),
+        sim_result.masa.len(),
         duration.as_millis(),
         mem_mb,
         seed_used,
@@ -191,24 +193,23 @@ fn main() -> Result<()> {
         Some(attempt),
     );
 
-    for node in tree.preorder() {
-        println!("Node ID: {}", tree.node_id(node),);
-    }
+    let frag_json = sim_result
+        .fragmentation
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    fs::write(
+        args.output_dir.join("fragmentation.json"),
+        format!("[{}]", frag_json),
+    )
+    .expect("Unable to write fragmentation.json");
 
     write_newick_to_file(
         std::slice::from_ref(&tree),
         args.output_dir.join("tree.nwk"),
     )
     .context("Failed to write optimized tree to file")?;
-    let tree_from_just_written_file = read_newick_from_file(args.output_dir.join("tree.nwk"))
-        .expect("Unable to read back the just written tree file")
-        .pop()
-        .expect("The just written tree file was empty");
-    println!(
-        "Tree read back from file matches original: {}",
-        tree_from_just_written_file
-    );
-    println!("newick = {}", tree.to_newick());
 
     println!("Results written to: {:?}", args.output_dir);
 
