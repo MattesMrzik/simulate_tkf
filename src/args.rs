@@ -62,4 +62,8 @@ pub struct Args {
     /// Open results in AliView after simulation
     #[arg(long)]
     pub ali_view: bool,
+
+        /// Retry simulation if any leaf has an empty sequence
+    #[arg(long)]
+    pub retry_if_empty_leaf: bool,
 }
