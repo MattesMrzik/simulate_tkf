@@ -193,12 +193,6 @@ fn main() -> Result<()> {
     )
     .expect("Unable to copy info file");
 
-    write_newick_to_file(
-        std::slice::from_ref(&tree),
-        args.output_dir.join("tree.nwk"),
-    )
-    .context("Failed to write tree to file")?;
-
     println!("Results written to: {:?}", args.output_dir);
 
     if args.ali_view {
