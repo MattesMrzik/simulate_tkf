@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use clap::Parser;
 use memory_stats::memory_stats;
 use std::collections::HashSet;
@@ -6,7 +6,6 @@ use std::fs;
 use std::io::Write;
 
 use phylo::alignment::{Alignment, AncestralAlignment, MASA};
-use phylo::io::write_newick_to_file;
 use phylo::random::DefaultGenerator;
 use phylo::substitution_models::{JC69, SubstModel};
 use phylo::tkf_model::TKF92IndelModel;
@@ -129,6 +128,10 @@ fn main() -> Result<()> {
         let initial_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
         let start = std::time::Instant::now();
         sim_result = simulator.simulate_with_fragments::<MASA>();
+        sim_result
+            .remove_extinct_columns()
+            .expect("Failed to remove extinct columns");
+
         let duration = start.elapsed();
         let final_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
 
@@ -155,9 +158,6 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("MSA length: {}", sim_result.masa.len());
-    sim_result.masa.remove_extinct_columns();
-
     let masa_len = sim_result.masa.len();
     // Write MASA to masa.fasta
     let mut masa_file =
@@ -177,6 +177,7 @@ fn main() -> Result<()> {
 
     let frag_json = sim_result
         .fragmentation
+        .right_exclusive_boundaries()
         .iter()
         .map(|n| n.to_string())
         .collect::<Vec<_>>()
@@ -192,8 +193,6 @@ fn main() -> Result<()> {
         args.output_dir.join("info.txt"),
     )
     .expect("Unable to copy info file");
-
-    println!("Results written to: {:?}", args.output_dir);
 
     if args.ali_view {
         let msa_path = args.output_dir.join("masa.fasta");
