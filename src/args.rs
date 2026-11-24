@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
 // TODO: rather than implementing the arg as str and converting it here we could add this to the
@@ -24,12 +24,35 @@ use std::path::PathBuf;
 //         }
 //     }
 
+/// Sequence type of the simulated alignment
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum SeqType {
+    /// Nucleotides, simulated with the JC69 substitution model
+    N,
+    /// Amino acids, simulated with the WAG substitution model
+    AA,
+}
+
+impl SeqType {
+    /// Name of the substitution model used for this sequence type
+    pub fn subst_model_name(self) -> &'static str {
+        match self {
+            SeqType::N => "JC69",
+            SeqType::AA => "WAG",
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     /// Path to the Newick tree file
     #[arg(short, long)]
     pub tree_file: PathBuf,
+
+    /// Sequence type: 'N' (nucleotides, JC69) or 'AA' (amino acids, WAG)
+    #[arg(long, value_enum, ignore_case = true, default_value = "N")]
+    pub seq_type: SeqType,
 
     /// TKF92 lambda (insertion rate)
     #[arg(short, long, default_value_t = 0.1)]

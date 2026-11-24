@@ -7,12 +7,12 @@ use std::io::Write;
 
 use phylo::alignment::{Alignment, AncestralAlignment, MASA};
 use phylo::random::DefaultGenerator;
-use phylo::substitution_models::{JC69, SubstModel};
+use phylo::substitution_models::{JC69, QMatrix, SubstModel, WAG};
 use phylo::tkf_model::TKF92IndelModel;
 use phylo::tkf_model::simulate_msa::{RootLength, TKFMSASimulationResult, TKFMSASimulator};
 use phylo::tree::Tree;
 
-use crate::args::Args;
+use crate::args::{Args, SeqType};
 
 mod args;
 
@@ -43,6 +43,18 @@ fn set_missing_tree_node_ids(tree: &Tree) -> Tree {
     tree_with_all_ids
 }
 
+fn to_standard_newick(tree: &Tree) -> String {
+    let newick = tree.to_newick();
+    let newick = newick.trim();
+    match newick
+        .strip_prefix('(')
+        .and_then(|inner| inner.strip_suffix(");"))
+    {
+        Some(inner) => format!("{inner};"),
+        None => newick.to_string(),
+    }
+}
+
 fn write_info_file(
     path: &std::path::Path,
     msa_len: usize,
@@ -60,6 +72,7 @@ fn write_info_file(
     writeln!(file, "lambda: {}", args.lambda).unwrap();
     writeln!(file, "mu: {}", args.mu).unwrap();
     writeln!(file, "r: {}", args.r).unwrap();
+    writeln!(file, "subst_model: {}", args.seq_type.subst_model_name()).unwrap();
     if let Some(root_len) = &args.root_length {
         writeln!(file, "root_length: {}", root_len).unwrap();
     }
@@ -74,17 +87,13 @@ fn write_info_file(
     }
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
-
+fn run<Q: QMatrix>(args: Args, subst_model: SubstModel<Q>) -> Result<()> {
     let newick = fs::read_to_string(&args.tree_file).expect("Unable to read tree file");
     let tree = phylo::tree::tree_parser::from_newick(&newick)
         .expect("Unable to parse Newick tree")
         .pop()
         .expect("Tree file was empty");
     let tree = set_missing_tree_node_ids(&tree);
-
-    let subst_model = SubstModel::<JC69>::new(&[], &[]);
 
     let tkf_model = TKF92IndelModel::new(args.lambda, args.mu, args.r);
 
@@ -131,6 +140,9 @@ fn main() -> Result<()> {
         sim_result
             .remove_extinct_columns()
             .expect("Failed to remove extinct columns");
+        if sim_result.prune_empty_leaves().is_err() {
+            continue;
+        }
 
         let duration = start.elapsed();
         let final_mem = memory_stats().map(|ms| ms.physical_mem).unwrap_or(0);
@@ -165,7 +177,7 @@ fn main() -> Result<()> {
     write!(masa_file, "{}", sim_result.masa).expect("Unable to write to masa.fasta");
 
     // Convert MASA to MSA (leaf nodes only) and write to msa.fasta
-    let leaf_msa: phylo::alignment::MSA = sim_result.masa.clone().into_alignment(&tree);
+    let leaf_msa: phylo::alignment::MSA = sim_result.masa.clone().into_alignment(&sim_result.tree);
     let leaf_msa_len = leaf_msa.len();
     assert!(
         leaf_msa_len == masa_len,
@@ -174,6 +186,15 @@ fn main() -> Result<()> {
     let mut msa_file =
         fs::File::create(args.output_dir.join("msa.fasta")).expect("Unable to create msa.fasta");
     write!(msa_file, "{}", leaf_msa).expect("Unable to write to msa.fasta");
+
+    // Write the tree the simulation actually used. This can differ from the input tree if
+    // empty leaves were pruned, so downstream tools need this version to stay consistent
+    // with the MSA/MASA (e.g. matching node ids for the root/ancestral sequences).
+    fs::write(
+        args.output_dir.join("tree.nwk"),
+        to_standard_newick(&sim_result.tree),
+    )
+    .expect("Unable to write tree.nwk");
 
     let frag_json = sim_result
         .fragmentation
@@ -204,4 +225,12 @@ fn main() -> Result<()> {
             .expect("Failed to open AliView");
     }
     Ok(())
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+    match args.seq_type {
+        SeqType::N => run(args, SubstModel::<JC69>::new(&[], &[])),
+        SeqType::AA => run(args, SubstModel::<WAG>::new(&[], &[])),
+    }
 }
